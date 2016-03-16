@@ -1,15 +1,18 @@
 package io.xdevs23.cornowser.browser;
 
+import android.Manifest;
 import android.app.Activity;
 import android.content.Context;
 import android.content.DialogInterface;
 import android.content.Intent;
-import android.graphics.ColorMatrix;
-import android.graphics.ColorMatrixColorFilter;
-import android.graphics.Paint;
+import android.content.pm.PackageManager;
+import android.graphics.Color;
+import android.graphics.PorterDuff;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
+import android.support.v4.app.ActivityCompat;
+import android.support.v4.content.ContextCompat;
 import android.support.v7.app.AlertDialog;
 import android.view.KeyEvent;
 import android.view.View;
@@ -19,11 +22,17 @@ import android.view.inputmethod.InputMethodManager;
 import android.widget.EditText;
 import android.widget.ImageButton;
 import android.widget.RelativeLayout;
+import android.widget.Toast;
 
 import com.baoyz.widget.PullRefreshLayout;
+import com.crashlytics.android.Crashlytics;
+
+import junit.framework.AssertionFailedError;
 
 import org.xdevs23.android.app.XquidCompatActivity;
+import org.xdevs23.android.widget.XquidRelativeLayout;
 import org.xdevs23.debugutils.Logging;
+import org.xdevs23.debugutils.StackTraceParser;
 import org.xdevs23.net.DownloadUtils;
 import org.xdevs23.rey.material.widget.ProgressView;
 import org.xdevs23.threads.Sleeper;
@@ -31,11 +40,15 @@ import org.xdevs23.ui.utils.BarColors;
 import org.xdevs23.ui.utils.DpUtil;
 import org.xdevs23.ui.view.listview.XDListView;
 import org.xdevs23.ui.widget.TastyOverflowMenu;
+import org.xwalk.core.XWalkPreferences;
 
+import io.fabric.sdk.android.Fabric;
 import io.xdevs23.cornowser.browser.activity.BgLoadActivity;
 import io.xdevs23.cornowser.browser.activity.SettingsActivity;
 import io.xdevs23.cornowser.browser.browser.BrowserStorage;
+import io.xdevs23.cornowser.browser.browser.modules.ColorUtil;
 import io.xdevs23.cornowser.browser.browser.modules.WebThemeHelper;
+import io.xdevs23.cornowser.browser.browser.modules.adblock.AdBlockManager;
 import io.xdevs23.cornowser.browser.browser.modules.tabs.BasicTabSwitcher;
 import io.xdevs23.cornowser.browser.browser.modules.tabs.BlueListedTabSwitcher;
 import io.xdevs23.cornowser.browser.browser.modules.tabs.TabStorage;
@@ -43,12 +56,15 @@ import io.xdevs23.cornowser.browser.browser.modules.tabs.TabSwitcherOpenButton;
 import io.xdevs23.cornowser.browser.browser.modules.tabs.TabSwitcherWrapper;
 import io.xdevs23.cornowser.browser.browser.modules.ui.OmniboxAnimations;
 import io.xdevs23.cornowser.browser.browser.modules.ui.OmniboxControl;
-import io.xdevs23.cornowser.browser.browser.modules.ui.RenderColorMode.ColorMode;
 import io.xdevs23.cornowser.browser.browser.xwalk.CrunchyWalkView;
 import io.xdevs23.cornowser.browser.updater.UpdateActivity;
 import io.xdevs23.cornowser.browser.updater.UpdaterStorage;
 
 public class CornBrowser extends XquidCompatActivity {
+
+    public static final String
+            URL_TO_LOAD_KEY     = "urlToLoad"
+            ;
 
     public static CrunchyWalkView publicWebRender = null;
 
@@ -69,8 +85,13 @@ public class CornBrowser extends XquidCompatActivity {
 
     public static String readyToLoadUrl = "";
 
-    public static boolean isBgBoot = false;
+    public static boolean
+            isBgBoot                = false,
+            alreadyCheckedUpdate    = false
+                    ;
 
+    private static final int
+            PERMISSION_REQUEST_CODE = 1;
 
     private static PullRefreshLayout omniPtrLayout;
 
@@ -99,6 +120,11 @@ public class CornBrowser extends XquidCompatActivity {
     private static boolean isInitialized  = false;
     private static boolean isNewIntent    = false;
 
+    private static final int
+            aLeft   = RelativeLayout.ALIGN_PARENT_LEFT,
+            aTop    = RelativeLayout.ALIGN_PARENT_TOP,
+            aRight  = RelativeLayout.ALIGN_PARENT_RIGHT,
+            aBottom = RelativeLayout.ALIGN_PARENT_BOTTOM;
 
     private AlertDialog optionsMenuDialog;
 
@@ -106,7 +132,7 @@ public class CornBrowser extends XquidCompatActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        bootstrap();
+        if(!isBootstrapped) bootstrap();
     }
 
     /**
@@ -114,13 +140,23 @@ public class CornBrowser extends XquidCompatActivity {
      */
     protected void bootstrap() {
         if(isBgBoot) moveTaskToBack(true);
-        if(!isBootstrapped
-                && !isInitialized
-                && staticContext == null
-                && (!isNewIntent)) {
-            setContentView(R.layout.main_corn);
+        if(isNormalStartUp()) {
+            if(!isBgBoot) checkMallowPermissions();
+
+            try {
+                XWalkPreferences.setValue(XWalkPreferences.ANIMATABLE_XWALK_VIEW,
+                        (!System.getProperty("os.arch", "armv7a").toLowerCase().contains("arm")));
+                XWalkPreferences.setValue(XWalkPreferences.SUPPORT_MULTIPLE_WINDOWS, true);
+                XWalkPreferences.setValue(XWalkPreferences.JAVASCRIPT_CAN_OPEN_WINDOW, true);
+                XWalkPreferences.setValue(XWalkPreferences.ENABLE_THEME_COLOR, false);
+            } catch(AssertionFailedError ex) {
+                Logging.logd("Error while setting some XWalk preferences. Are you using x86?");
+            }
 
             initAll();
+
+            if(!getBrowserStorage().isCrashlyticsOptedOut())
+                Fabric.with(Core.applicationCore, new Crashlytics());
 
             isBootstrapped = true;
         } else if(isNewIntent) {
@@ -135,10 +171,49 @@ public class CornBrowser extends XquidCompatActivity {
 
         handleStartupWebLoad();
 
-        if( (!isBgBoot) && (!checkUpdate.isAlive()) || (!isNewIntent) )
-            checkUpdate.start();
+        if(isUpdateCheckAllowed() && (!alreadyCheckedUpdate)) checkUpdate.start();
+
+        // AdBlock hosts update
+        if(getBrowserStorage().isAdBlockEnabled())
+            AdBlockManager.initAdBlock();
 
         if(!isBgBoot) fastReloadComponents();
+    }
+
+    private boolean isNormalStartUp() {
+        return (!isBootstrapped
+                && !isInitialized
+                && staticContext == null
+                && (!isNewIntent));
+    }
+
+    private boolean isUpdateCheckAllowed() {
+        return ((!isBgBoot) && (!checkUpdate.isAlive()) || (!isNewIntent));
+    }
+
+    /**
+     * Permission check for Marshmallow
+     */
+    public void checkMallowPermissions() {
+        if(Build.VERSION.SDK_INT >= Build.VERSION_CODES.M &&
+                ContextCompat.checkSelfPermission(
+                        getApplicationContext(), Manifest.permission.WRITE_EXTERNAL_STORAGE
+                ) != PackageManager.PERMISSION_GRANTED && (!isBgBoot)) {
+
+            Toast.makeText(getApplicationContext(),
+                    getString(R.string.permission_hint_write_storage), Toast.LENGTH_LONG).show();
+
+
+            if(!ActivityCompat.shouldShowRequestPermissionRationale(this,
+                    Manifest.permission.WRITE_EXTERNAL_STORAGE) ||
+
+                    checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) !=
+                    PackageManager.PERMISSION_GRANTED)
+
+                ActivityCompat.requestPermissions(this,
+                        new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE},
+                        PERMISSION_REQUEST_CODE);
+        }
     }
 
     /**
@@ -151,6 +226,22 @@ public class CornBrowser extends XquidCompatActivity {
         else if (getIntent().getStringExtra(BgLoadActivity.bgLoadKey) != null &&
                 (!getIntent().getStringExtra(BgLoadActivity.bgLoadKey).isEmpty()))
             getTabSwitcher().addTab(getIntent().getStringExtra(BgLoadActivity.bgLoadKey));
+
+        else if(getIntent().getStringExtra(URL_TO_LOAD_KEY) != null &&
+                (!getIntent().getStringExtra(URL_TO_LOAD_KEY).isEmpty()))
+            getTabSwitcher().addTab(getIntent().getStringExtra(URL_TO_LOAD_KEY));
+
+        else if(getBrowserStorage().isLastSessionEnabled() &&
+                getBrowserStorage().getLastBrowsingSession() != null) {
+            Logging.logd("Restoring last session ("
+                    + getBrowserStorage().getLastBrowsingSession().length + " tabs)...");
+            for (String s : getBrowserStorage().getLastBrowsingSession()) {
+                getTabSwitcher().addTab(s);
+            }
+            getTabSwitcher().switchTab(0);
+            getTabSwitcher().fixWebResumation();
+            Logging.logd("Restored!");
+        }
 
         else if (readyToLoadUrl.isEmpty())
             getTabSwitcher().addTab(browserStorage.getUserHomePage(), "");
@@ -166,6 +257,7 @@ public class CornBrowser extends XquidCompatActivity {
      */
     public void initAll() {
         Logging.logd("Initialization started.");
+        setContentView(R.layout.main_corn);
         preInit();
         init();
         isInitialized = true;
@@ -186,14 +278,14 @@ public class CornBrowser extends XquidCompatActivity {
         });
         getWindow().getDecorView().setOnSystemUiVisibilityChangeListener(
                 new View.OnSystemUiVisibilityChangeListener() {
-            @Override
-            public void onSystemUiVisibilityChange(int visibility) {
-                if(browserStorage.getIsFullscreenEnabled() &&
-                        (visibility & View.SYSTEM_UI_FLAG_FULLSCREEN) == 0) {
-                    handleFullscreenMode();
-                }
-            }
-        });
+                    @Override
+                    public void onSystemUiVisibilityChange(int visibility) {
+                        if (browserStorage.getIsFullscreenEnabled() &&
+                                (visibility & View.SYSTEM_UI_FLAG_FULLSCREEN) == 0) {
+                            handleFullscreenMode();
+                        }
+                    }
+                });
     }
 
     // Pre init start
@@ -213,8 +305,6 @@ public class CornBrowser extends XquidCompatActivity {
         if(!isNewIntent) publicWebRenderLayout = (RelativeLayout) findViewById(R.id.webrender_layout);
 
         if(!isNewIntent) initBrowsing();
-
-        initColorMode();
     }
 
     // Pre init end
@@ -286,8 +376,8 @@ public class CornBrowser extends XquidCompatActivity {
         openTabswitcherImgBtn   = (TabSwitcherOpenButton) findViewById(R.id.omnibox_control_open_tabswitcher);
         goForwardImgBtn         = (ImageButton)           findViewById(R.id.omnibox_control_forward);
 
-        TastyOverflowMenu overflowMenuLayout;
-        overflowMenuLayout      = (TastyOverflowMenu)   findViewById(R.id.omnibox_control_overflowmenu);
+        TastyOverflowMenu overflowMenuLayout
+                = (TastyOverflowMenu)   findViewById(R.id.omnibox_control_overflowmenu);
 
 
         browserInputBar.setOnKeyListener(new View.OnKeyListener() {
@@ -311,6 +401,7 @@ public class CornBrowser extends XquidCompatActivity {
             }
         });
 
+
         openTabswitcherImgBtn.init(getContext());
         openTabswitcherImgBtn.setOnClickListener(new View.OnClickListener() {
             @Override
@@ -318,48 +409,42 @@ public class CornBrowser extends XquidCompatActivity {
                 getTabSwitcher().switchSwitcher();
             }
         });
+        openTabswitcherImgBtn.setOnLongClickListener(new View.OnLongClickListener() {
+            @Override
+            public boolean onLongClick(View v) {
+                getTabSwitcher().addTab(getBrowserStorage().getUserHomePage());
+                return false;
+            }
+        });
 
         goForwardImgBtn.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                getWebEngine().goForward();
+                if(getWebEngine().currentProgress != 100) getWebEngine().stopLoading();
+                else getWebEngine().goForward();
             }
         });
         goForwardImgBtn.setVisibility(View.INVISIBLE);
+        goForwardImgBtn.setColorFilter(Color.BLACK, PorterDuff.Mode.MULTIPLY);
 
     }
 
     /**
      * Properly init omnibox position
      */
-    public void initOmniboxPosition() {
+    public static void initOmniboxPosition() {
         Logging.logd("    Omnibox position");
 
-        int
-                aLeft   = RelativeLayout.ALIGN_PARENT_LEFT,
-                aTop    = RelativeLayout.ALIGN_PARENT_TOP,
-                aRight  = RelativeLayout.ALIGN_PARENT_RIGHT,
-                aBottom = RelativeLayout.ALIGN_PARENT_BOTTOM;
+        RelativeLayout.LayoutParams omniparams =
+                XquidRelativeLayout.LayoutParams.getPredefinedLPFromViewMetrics(omnibox);
+        RelativeLayout.LayoutParams webrparams =
+                XquidRelativeLayout.LayoutParams.getPredefinedLPFromViewMetrics(publicWebRenderLayout);
+        RelativeLayout.LayoutParams otilparams =
+                XquidRelativeLayout.LayoutParams.getPredefinedLPFromViewMetrics(omniboxTinyItemsLayout);
 
-        RelativeLayout.LayoutParams omniparams = new RelativeLayout.LayoutParams(
-                omnibox.getLayoutParams().width,
-                omnibox.getLayoutParams().height
-        );
-        RelativeLayout.LayoutParams webrparams = new RelativeLayout.LayoutParams(
-                publicWebRenderLayout.getLayoutParams().width,
-                publicWebRenderLayout.getLayoutParams().height
-        );
-        RelativeLayout.LayoutParams otilparams = new RelativeLayout.LayoutParams(
-                omniboxTinyItemsLayout.getLayoutParams().width,
-                omniboxTinyItemsLayout.getLayoutParams().height
-        );
 
-        omniparams.addRule(aLeft);
-        omniparams.addRule(aRight);
-        webrparams.addRule(aLeft);
-        webrparams.addRule(aRight);
-        otilparams.addRule(aLeft);
-        otilparams.addRule(aRight);
+        XquidRelativeLayout.addRuleLP(aLeft,  omniparams, webrparams, otilparams);
+        XquidRelativeLayout.addRuleLP(aRight, omniparams, webrparams, otilparams);
 
         if(browserStorage.getOmniboxPosition()) {
             omniparams.addRule(aBottom);
@@ -376,78 +461,20 @@ public class CornBrowser extends XquidCompatActivity {
         omniboxTinyItemsLayout.setLayoutParams(otilparams);
 
         ((RelativeLayout.LayoutParams)browserInputBar.getLayoutParams()).setMargins(
-                0,
-                0,
-                DpUtil.dp2px(getContext(),
-                        3 * 32 + 2),
-                0
+                0, 0, DpUtil.dp2px(getContext(), 3 * 32 + 2), 0
         );
 
-        omniboxTinyItemsLayout.findViewById(R.id.omnibox_separator)
-            .setTranslationY(browserStorage.getOmniboxPosition() ? -DpUtil.dp2px(getContext(), 3) : 0);
+        // This is for proper refresh feature when omnibox is at bottom
+        omniPtrLayout.setRotation(OmniboxControl.isBottom() ? 180f : 0f);
+        getActivity().findViewById(R.id.omnibox_layout_inner)
+                .setRotation(OmniboxControl.isBottom() ? 180f : 0);
 
         omnibox.bringToFront();
         omniboxTinyItemsLayout.bringToFront();
         omniboxControls.bringToFront();
+        getActivity().findViewById(R.id.omnibox_separator).bringToFront();
 
         resetOmniPositionState();
-    }
-
-    public static void initColorMode() {
-        if(publicWebRenderLayout.getChildCount() <= 0) return;
-        Logging.logd("Applying web render color mode...");
-        ColorMode cm = getBrowserStorage().getColorMode();
-        Paint paint = new Paint();
-        float[] negativeColor = {
-                -1.0f, 0, 0, 0, 255,    // Red
-                0, -1.0f, 0, 0, 255,    // Green
-                0, 0, -1.0f, 0, 255,    // Blue
-                0, 0, 0,  1.0f, 0       // Alpha
-        };
-        float[] darkColor = {
-                1f, 0, 0, 0, -255,
-                0, 1f, 0, 0, -255,
-                0, 0, 1f, 0, -255,
-                0, 0, 0, 1f,    0
-        };
-        float[] invertColor = {
-                -1f, 0, 0, 0, 0,
-                0, -1f, 0, 0, 0,
-                0, 0, -1f, 0, 0,
-                0, 0, 0, 1f,  0
-        };
-
-        Logging.logd("Found color mode: " + cm.mode);
-
-        switch(cm.mode) {
-            case ColorMode.NORMAL:
-                Logging.logd("Applying normal color mode");
-                paint = null;
-                break;
-            case ColorMode.DARK:
-                Logging.logd("Applying dark mode");
-                paint.setColorFilter(new ColorMatrixColorFilter(darkColor));
-                break;
-            case ColorMode.NEGATIVE:
-                Logging.logd("Applying negative mode");
-                paint.setColorFilter(new ColorMatrixColorFilter(negativeColor));
-                break;
-            case ColorMode.INVERT:
-                Logging.logd("Applying inverted mode");
-                paint.setColorFilter(new ColorMatrixColorFilter(invertColor));
-                break;
-            case ColorMode.GREYSCALE:
-                Logging.logd("Applying greyscale");
-                ColorMatrix m = new ColorMatrix();
-                m.setSaturation(0);
-                paint.setColorFilter(new ColorMatrixColorFilter(m));
-                break;
-            default:
-                Logging.logd("Warning: Unknown color mode " + cm.mode + ".");
-                break;
-        }
-
-        publicWebRenderLayout.getChildAt(0).setLayerType(View.LAYER_TYPE_HARDWARE, paint);
     }
 
     /**
@@ -455,7 +482,6 @@ public class CornBrowser extends XquidCompatActivity {
      */
     public void reloadComponents() {
         initOmniboxPosition();
-        initColorMode();
     }
 
     /**
@@ -480,27 +506,76 @@ public class CornBrowser extends XquidCompatActivity {
     }
 
     /**
-     * Set the text inside the omnibox
+     * Set the text inside the omnibox (for old calls)
      * @param url URL
      */
+    @Deprecated
     public static void applyOnlyInsideOmniText(String url) {
+        applyOnlyInsideOmniText();
+    }
+
+    /**
+     * Set the text inside the omnibox
+     */
+    public static void applyOnlyInsideOmniText() {
         try {
-            browserInputBar.setText(url
-                    .replaceFirst("^(.*)://", ""));
+            String eurl = getWebEngine().getUrl();
+            eurl = eurl.replaceFirst("^([^ ]*)://", "");
+            if(eurl.substring(eurl.length() - 2, eurl.length() - 1).equals("/"))
+                eurl = eurl.substring(0, eurl.length() - 2);
+            browserInputBar.setText(eurl);
+            if(getWebEngine().getUrl().startsWith("https://")) {
+                getActivity().findViewById(R.id.omnibox_separator)
+                        .setBackgroundColor(ColorUtil.getColor(R.color.transGreen));
+            } else getActivity().findViewById(R.id.omnibox_separator)
+                    .setBackgroundColor(ColorUtil.getColor(R.color.dark_semi_more_transparent));
         } catch(Exception ex) {
             Logging.logd("Warning: Didn't succeed while applying inside omni text.");
         }
+    }
 
+    /**
+     * Set the text of the address bar (and apply it in tab switcher) (for old calls)
+     * @param url URL to set as text
+     */
+    @Deprecated
+    public static void applyInsideOmniText(String url) {
+        applyInsideOmniText();
     }
 
     /**
      * Set the text of the address bar (and apply it in tab switcher)
-     * @param url URL to set as text
      */
-    public static void applyInsideOmniText(String url) {
+    public static void applyInsideOmniText() {
         if(browserInputBar.hasFocus()) return;
-        getTabSwitcher().changeCurrentTab(url, publicWebRender.getTitle());
-        applyOnlyInsideOmniText(url);
+        try {
+            if (publicWebRender.getUrl().isEmpty())
+                publicWebRender.load(getTabSwitcher().getCurrentTab().getUrl());
+            getTabSwitcher().changeCurrentTab(publicWebRender.getUrl(), publicWebRender.getTitle());
+            getTabSwitcher().updateAllTabs();
+        } catch(Exception ex) {
+            StackTraceParser.logStackTrace(ex);
+        }
+        applyOnlyInsideOmniText();
+    }
+
+    /**
+     * Update the progress bar
+     */
+    public static void updateWebProgress() {
+        webProgressBar.setProgress( ((float)publicWebRender.currentProgress) / 100);
+    }
+
+    /**
+     * Items of options menu
+     */
+    private static class optMenuItems {
+        public static final int
+                UPDATER         = 0,
+                SETTINGS        = 1,
+                SHARE_PAGE      = 2,
+                ADD_HOME_SHCT   = 3
+                        ;
     }
 
     /**
@@ -509,7 +584,9 @@ public class CornBrowser extends XquidCompatActivity {
     public void initOptionsMenu() {
         optionsMenuItems = new String[] {
                 getString(R.string.cornmenu_item_updater),
-                getString(R.string.cornmenu_item_settings)
+                getString(R.string.cornmenu_item_settings),
+                getString(R.string.optmenu_share),
+                getString(R.string.cornmenu_item_addhomesc)
         };
         AlertDialog.Builder builder = new AlertDialog.Builder(this, R.style.AlertDialogBlueRipple);
         builder.setAdapter(XDListView.createLittle(getContext(), optionsMenuItems), new DialogInterface.OnClickListener() {
@@ -521,6 +598,30 @@ public class CornBrowser extends XquidCompatActivity {
                         break;
                     case optMenuItems.SETTINGS:
                         startActivity(new Intent(getContext(), SettingsActivity.class));
+                        break;
+                    case optMenuItems.SHARE_PAGE:
+                        Intent shareIntent = new Intent(Intent.ACTION_SEND);
+                        shareIntent.setType("text/plain");
+                        shareIntent.putExtra
+                                (Intent.EXTRA_TEXT, publicWebRender.getUrl());
+                        startActivity(Intent.createChooser(shareIntent,
+                                getString(R.string.optmenu_share)));
+                        break;
+                    case optMenuItems.ADD_HOME_SHCT:
+                        final Intent shortcutIntent = new Intent(getActivity(), CornBrowser.class);
+                        shortcutIntent.putExtra(URL_TO_LOAD_KEY, getWebEngine().getUrl());
+
+                        final Intent intent = new Intent();
+                        intent.putExtra(Intent.EXTRA_SHORTCUT_INTENT, shortcutIntent);
+                        intent.putExtra(Intent.EXTRA_SHORTCUT_NAME, getWebEngine().getTitle());
+                        if(getWebEngine().getFavicon() != null)
+                            intent.putExtra(Intent.EXTRA_SHORTCUT_ICON, getWebEngine().getFavicon());
+                        else
+                            intent.putExtra(Intent.EXTRA_SHORTCUT_ICON_RESOURCE,
+                                    Intent.ShortcutIconResource
+                                            .fromContext(getContext(), R.mipmap.m_app_icon));
+                        intent.setAction("com.android.launcher.action.INSTALL_SHORTCUT");
+                        sendBroadcast(intent);
                         break;
                     default:
                         break;
@@ -534,16 +635,6 @@ public class CornBrowser extends XquidCompatActivity {
     // Init end
 
     /**
-     * Items of options menu
-     */
-    private static class optMenuItems {
-        public static final int
-            UPDATER         = 0,
-            SETTINGS        = 1
-                    ;
-    }
-
-    /**
      * Open the options menu
      */
     @Override
@@ -553,13 +644,17 @@ public class CornBrowser extends XquidCompatActivity {
 
     /**
      * Hide/show go forward button
-     * @param visible True for showing, false for hiding
      */
-    public static void toggleGoForwardControlVisibility(boolean visible) {
-        if(visible && goForwardImgBtn.getVisibility() == View.INVISIBLE)
+    public static void handleGoForwardControlVisibility() {
+        if(publicWebRender.currentProgress != 100) {
+            goForwardImgBtn.setBackgroundResource(R.drawable.main_cross_rot_icon);
             goForwardImgBtn.setVisibility(View.VISIBLE);
-        else if(goForwardImgBtn.getVisibility() == View.VISIBLE)
-            goForwardImgBtn.setVisibility(View.INVISIBLE);
+        } else {
+            if(publicWebRender.canGoForward()) {
+                goForwardImgBtn.setBackgroundResource(R.drawable.ic_arrow_forward_black_48dp);
+                goForwardImgBtn.setVisibility(View.VISIBLE);
+            } else goForwardImgBtn.setVisibility(View.INVISIBLE);
+        }
     }
 
     /**
@@ -683,7 +778,12 @@ public class CornBrowser extends XquidCompatActivity {
             publicWebRender.onShow();
 
             resetBarColor();
-            WebThemeHelper.tintNow(publicWebRender);
+            WebThemeHelper.tintNow();
+
+            if(!browserStorage.getOmniColoringEnabled())
+                WebThemeHelper.resetWebThemeColor(omnibox);
+
+            publicWebRender.drawWithColorMode();
 
             if(readyToLoadUrl.length() > 0) {
                 publicWebRender.load(readyToLoadUrl, null);
@@ -698,9 +798,19 @@ public class CornBrowser extends XquidCompatActivity {
     @Override
     protected void onPause() {
         Logging.logd("Activity paused.");
-        super.onPause();
-        reloadComponents();
         onPauseWebRender();
+        if(getBrowserStorage().isLastSessionEnabled()) {
+            String[] sessionArray = new String[getTabSwitcher().getTabStorage().getTabCount()];
+            Logging.logd("Session urls:" + sessionArray.length);
+            for (int i = 0; i < getTabSwitcher().getTabStorage().getTabCount(); i++) {
+                Logging.logd("Saving tab " + i);
+                if (getBrowserStorage().isLastSessionEnabled())
+                    sessionArray[i] = getTabSwitcher().getTabStorage().getTab(i).getUrl();
+            }
+            if(sessionArray != getBrowserStorage().getLastBrowsingSession())
+                getBrowserStorage().saveLastBrowsingSession(sessionArray);
+        }
+        super.onPause();
     }
 
     @Override
@@ -709,18 +819,29 @@ public class CornBrowser extends XquidCompatActivity {
         super.onResume();
         if(this.getWindow().isActive() && isBgBoot) {
             isBgBoot = false;
-            checkUpdate.start();
+            if( (!checkUpdate.isAlive()) && (!alreadyCheckedUpdate) )
+                checkUpdate.start();
             fastReloadComponents();
         } else onResumeWebRender();
-
+        reloadComponents();
     }
 
     @Override
     protected void onDestroy() {
-        Logging.logd("Activity destroyed.");
+        Logging.logd("Destroying activity");
         super.onDestroy();
-        if (publicWebRender != null)
-            publicWebRender.onDestroy();
+        if (publicWebRender != null) {
+            Logging.logd("Saving state and destroying webviews...");
+            String[] sessionArray = new String[getTabSwitcher().getTabStorage().getTabCount()];
+            Logging.logd("Session urls:" + sessionArray.length);
+            for (int i = 0; i < getTabSwitcher().getTabStorage().getTabCount(); i++) {
+                Logging.logd("Shutting down tab " + i);
+                if(getBrowserStorage().isLastSessionEnabled())
+                    sessionArray[i] = getTabSwitcher().getTabStorage().getTab(i).getUrl();
+                getTabSwitcher().getTabStorage().getTab(i).getWebView().onDestroy();
+            }
+            getBrowserStorage().saveLastBrowsingSession(sessionArray);
+        }
     }
 
     @Override
@@ -735,13 +856,31 @@ public class CornBrowser extends XquidCompatActivity {
     protected void onNewIntent(Intent intent) {
         Logging.logd("New intent!");
         getIntent().setData(intent.getData());
-        if(intent.getData() == null || intent.getDataString().isEmpty()) return;
+        if( (intent.getData() == null || intent.getDataString().isEmpty())
+                && intent.getStringExtra(URL_TO_LOAD_KEY).isEmpty()
+                && intent.getStringExtra(BgLoadActivity.bgLoadKey).isEmpty()) return;
+        Logging.logd("URL information in intent found");
+        if(!intent.getStringExtra(URL_TO_LOAD_KEY).isEmpty()) {
+            getIntent().putExtra(URL_TO_LOAD_KEY, intent.getStringExtra(URL_TO_LOAD_KEY));
+            handleStartupWebLoad();
+            return;
+        }
+        if(!intent.getStringExtra(BgLoadActivity.bgLoadKey).isEmpty()) {
+            getIntent().putExtra(BgLoadActivity.bgLoadKey,
+                    intent.getStringExtra(BgLoadActivity.bgLoadKey));
+            isBgBoot = true;
+        }
         isNewIntent = true;
         bootstrap();
     }
 
     @Override
     public void onBackPressed() {
+        if(browserInputBar != null && browserInputBar.hasFocus()) {
+            browserInputBar.clearFocus();
+            applyInsideOmniText();
+            return;
+        }
         if(!publicWebRender.goBack()) endApplication();
     }
 
@@ -793,6 +932,7 @@ public class CornBrowser extends XquidCompatActivity {
     private Thread checkUpdate = new Thread() {
         public void run() {
             try {
+                alreadyCheckedUpdate = true;
                 Sleeper.sleep(1000); // Give the browser a second to get air xD
                 String newVer = DownloadUtils.downloadString(UpdaterStorage.URL_VERSION_CODE);
                 newVersionAv  = DownloadUtils.downloadString(UpdaterStorage.URL_VERSION_NAME);

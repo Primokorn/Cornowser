@@ -5,10 +5,12 @@ import android.content.Intent;
 import android.net.Uri;
 import android.net.http.SslError;
 import android.webkit.ValueCallback;
+import android.webkit.WebResourceResponse;
 import android.widget.Toast;
 
 import org.xdevs23.android.content.res.AssetHelper;
 import org.xdevs23.debugutils.Logging;
+import org.xdevs23.debugutils.StackTraceParser;
 import org.xdevs23.net.http.HttpStatusCodeHelper;
 import org.xwalk.core.ClientCertRequest;
 import org.xwalk.core.XWalkHttpAuthHandler;
@@ -17,12 +19,14 @@ import org.xwalk.core.XWalkView;
 import org.xwalk.core.XWalkWebResourceRequest;
 import org.xwalk.core.XWalkWebResourceResponse;
 
+import java.io.ByteArrayInputStream;
 import java.util.regex.Pattern;
 
 import io.xdevs23.cornowser.browser.CornBrowser;
 import io.xdevs23.cornowser.browser.R;
 import io.xdevs23.cornowser.browser.browser.modules.CornHandler;
 import io.xdevs23.cornowser.browser.browser.modules.WebThemeHelper;
+import io.xdevs23.cornowser.browser.browser.modules.adblock.AdBlockManager;
 
 /**
  * A cool "resource client" for our crunchy view
@@ -33,7 +37,7 @@ public class CornResourceClient extends XWalkResourceClient {
 
     public static Pattern urlRegEx = Pattern.compile(
             "(" +
-                    "(^(https|http|ftp|rtmp)://.*[.].*)|" +         // Protocols for adresses
+                    "(^(https|http|ftp|rtmp)://[^ ]*[.][^ ]*)|" +   // Protocols for addresses
                     "^(file:///).*|" +                              // Local files
                     "^(CornHandler://).*|" +                        // Handler
                     "^(javascript:).*" +                            // Javascript
@@ -43,17 +47,18 @@ public class CornResourceClient extends XWalkResourceClient {
 
     public static Pattern urlSecRegEx = Pattern.compile(
             "(" +
-                    "(.*[.].*)|" +                                  // Adresses without protocol
+                    "([^ ]*[.][^ ]*)|" +                            // Addresses without protocol
                     "^(localhost).*|" +                             // localhost
-                    "(.*[.].*[.].*[.].*)|" +                        // IPv4 adresses
-                    "(.*(::|:).*)|" +                               // IPv6 adresses
-                    "(.*@.*[.].*)" +                                // user@host.domain
+                    "([^ ]*[.][^ ]*[.][^ ]*[.][^ ]*)|" +            // IPv4 addresses
+                    "([^ ]*(::|:)[^ ]*)|" +                         // IPv6 addresses
+                    "([^ ]*@[^ ]*[.][^ ]*)" +                       // user@host.tld
 
                     ")"
     );
 
     private boolean allowTinting = true;
-    private boolean loadingLessThanMin = true;
+
+    private boolean triedIntentLoad = false;
 
 
     public CornResourceClient(XWalkView view) {
@@ -73,19 +78,18 @@ public class CornResourceClient extends XWalkResourceClient {
         }
         checkIntentableUrl(url.toLowerCase());
         CornBrowser.resetOmniPositionState(true);
-        CornBrowser.resetBarColor();
         Logging.logd("Starting url loading '" + url + "'");
         return super.shouldOverrideUrlLoading(view, url);
     }
 
-    protected void checkIntentableUrl(String url) {
+    protected boolean checkIntentableUrl(String url) {
         Context c = CornBrowser.getContext();
+        boolean success = false;
         if(url.startsWith("intent")
                 || url.startsWith("market")
                 || url.contains("play.google.")
                 || url.contains("google.com/play")
                 || url.contains("spotify.")) {
-            boolean success = false;
             try {
                 c.startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
                 success = true;
@@ -93,44 +97,55 @@ public class CornResourceClient extends XWalkResourceClient {
                 // Ignore
             }
 
-            if(!success) {
-                try {
-                    String pkg;
-                    if(url.startsWith("market"))
-                        pkg = "com.android.vending";
-                    else if(url.contains("open.spotify."))
-                        pkg = "com.spotify.music";
-                    else pkg = "<unknown>";
-                    if(!("<unknown>").equals(pkg))
-                        c.startActivity(CornBrowser.getContext().getPackageManager().getLaunchIntentForPackage(pkg));
-
-                    success = true;
-                } catch(Exception ex) {
-                    // Ignore
-                }
-            }
-
             if(!success) Toast.makeText(c, "(°-°)", Toast.LENGTH_SHORT).show();
-        }
+        } else triedIntentLoad = false;
+        return success;
     }
 
     @Override
     public void onLoadStarted(XWalkView view, String url) {
+        if(AdBlockManager.isAdBlockedHost(url)) {
+            Logging.logd("AdBlock: Blocked ad!");
+            return;
+        }
         super.onLoadStarted(view, url);
         allowTinting = true;
-        CornBrowser.applyInsideOmniText(view.getUrl());
-        WebThemeHelper.tintNow(CrunchyWalkView.fromXWalkView(view));
+        CornBrowser.applyInsideOmniText();
+        WebThemeHelper.tintNow();
+        CornBrowser.publicWebRender.drawWithColorMode();
     }
 
     @Override
     public void onLoadFinished(XWalkView view, String url) {
         Logging.logd("Web load finished " + url + " " + view.getUrl());
         if(allowTinting)
-            WebThemeHelper.tintNow((CrunchyWalkView)view);
+            WebThemeHelper.tintNow();
         allowTinting = false;
         super.onLoadFinished(view, url);
-        CornBrowser.applyInsideOmniText(view.getUrl());
+        CornBrowser.applyInsideOmniText();
         currentWorkingUrl = view.getUrl();
+        CornBrowser.publicWebRender.drawWithColorMode();
+    }
+
+    @Override
+    public XWalkWebResourceResponse shouldInterceptLoadRequest(XWalkView view, XWalkWebResourceRequest request) {
+        return super.shouldInterceptLoadRequest(view, request);
+    }
+
+    @Override
+    public WebResourceResponse shouldInterceptLoadRequest(XWalkView view, String url) {
+        try {
+            if (CornBrowser.getBrowserStorage().isAdBlockEnabled()
+                    && CrunchyWalkView.fromXWalkView(view).getUIClient().readyForBugfreeBrowsing
+                    && AdBlockManager.isAdBlockedHost(url)) {
+                Logging.logd("AdBlock: Ad blocked");
+                return new WebResourceResponse("text/plain", "UTF-8",
+                        new ByteArrayInputStream("".getBytes()));
+            }
+        } catch(Exception ex) {
+            StackTraceParser.logStackTrace(ex);
+        }
+        return super.shouldInterceptLoadRequest(view, url);
     }
 
     @Override
@@ -147,11 +162,10 @@ public class CornResourceClient extends XWalkResourceClient {
     public void onProgressChanged(XWalkView view, int percentage) {
         super.onProgressChanged(view, percentage);
         Logging.logd("Actual loading progress: " + percentage);
-        CornBrowser.getWebProgressBar().setProgress((float) percentage * 0.01f);
-        if(loadingLessThanMin && percentage > 40) {
+        CrunchyWalkView.fromXWalkView(view).currentProgress = percentage;
+        CornBrowser.updateWebProgress();
+        if(percentage > 40)
             CornBrowser.getOmniPtrLayout().setRefreshing(false);
-            loadingLessThanMin = false;
-        }
     }
 
     @Override
@@ -164,6 +178,10 @@ public class CornResourceClient extends XWalkResourceClient {
                 else statusCode = HttpStatusCodeHelper.HttpStatusCode.UNKNOWN;
                 break;
             case ERROR_BAD_URL:
+                if(!triedIntentLoad) {
+                    triedIntentLoad = true;
+                    if(checkIntentableUrl(failingUrl)) return;
+                }
                 statusCode = HttpStatusCodeHelper.HttpStatusCode.ERR_BAD_URL;
                 break;
             case ERROR_AUTHENTICATION:
@@ -182,6 +200,10 @@ public class CornResourceClient extends XWalkResourceClient {
                 statusCode = HttpStatusCodeHelper.HttpStatusCode.ERROR_NOT_FOUND;
                 break;
             case ERROR_HOST_LOOKUP:
+                if(!triedIntentLoad) {
+                    triedIntentLoad = true;
+                    if(checkIntentableUrl(failingUrl)) return;
+                }
                 statusCode = HttpStatusCodeHelper.HttpStatusCode.ERR_NAME_NOT_RESOLVED;
                 break;
             case ERROR_IO:
@@ -203,6 +225,10 @@ public class CornResourceClient extends XWalkResourceClient {
                 statusCode = HttpStatusCodeHelper.HttpStatusCode.ERR_UNSUPPORTED_AUTH_SCHEME;
                 break;
             case ERROR_UNSUPPORTED_SCHEME:
+                if(!triedIntentLoad) {
+                    triedIntentLoad = true;
+                    if(checkIntentableUrl(failingUrl)) return;
+                }
                 statusCode = HttpStatusCodeHelper.HttpStatusCode.ERR_UNSUPPORTED_SCHEME;
                 break;
             case 0:  break;
@@ -218,7 +244,7 @@ public class CornResourceClient extends XWalkResourceClient {
                         AssetHelper.getAssetString("htdocs/error.html", CornBrowser.getContext()), // Error file
 
                         CornBrowser.getRStr(R.string.html_error_title),                     // Title 'Error'
-                        errorCode,
+                        errorCode + "<br />URL: " + failingUrl,
 
                         String.format(CornBrowser.getRStr(R.string.html_error_body_info),
                                 HttpStatusCodeHelper.getStatusCodeString(errorCode)), // Description

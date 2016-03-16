@@ -43,6 +43,7 @@ public class WebThemeHelper {
     }
 
     public static void setWebThemeColor(String color, RelativeLayout omnibox, Window window) {
+        if(!CornBrowser.getBrowserStorage().getOmniColoringEnabled()) return;
         if(!color.contains("#")) {
             boolean isMatched = false;
             for ( AllowedWordColors c : AllowedWordColors.values() )
@@ -73,6 +74,7 @@ public class WebThemeHelper {
     }
 
     public static void setWebThemeColor(int color, RelativeLayout omnibox, Window window) {
+        if(!CornBrowser.getBrowserStorage().getOmniColoringEnabled()) return;
         if(currentColor == 0) currentColor = ((ColorDrawable)omnibox.getBackground()).getColor();
         ColorFader.createAnimation(
                 CornBrowser.omnibox.getBackground(),
@@ -107,14 +109,21 @@ public class WebThemeHelper {
         } else resetWebThemeColor(omnibox);
     }
 
-    public static void tintNow(CrunchyWalkView view) {
+    public static void tintNow() {
+        if(!CornBrowser.getBrowserStorage().getOmniColoringEnabled()) return;
         try {
-            if (!view.getUrl().toLowerCase().contains("cornhandler://"))
-                CornHandler.sendRawJSRequest(view, AssetHelper.getAssetString("appScripts/webThemeColorUtility.js",
-                        view.getContext()));
+            if (!CornBrowser.getWebEngine().getUrl().toLowerCase().contains("cornhandler://"))
+                CornHandler.sendRawJSRequest(CornBrowser.getWebEngine(), AssetHelper.getAssetString("appScripts/webThemeColorUtility.js",
+                        CornBrowser.getWebEngine().getContext()));
         } catch(Exception ex) {
             Logging.logd("Warning: Did not succeed while starting tinting. Skipping.");
         }
+    }
+
+    // Overload for old calls
+    @Deprecated
+    public static void tintNow(CrunchyWalkView view) {
+        tintNow();
     }
 
 }

@@ -85,6 +85,28 @@ public abstract class BasicTabSwitcher extends ExtendedAndroidClass implements T
     }
 
     @Override
+    public void switchTab(int tab) {
+        for ( Tab t : tabStorage.getTabList() ) {
+            if(t != tabStorage.getTab(tab)) {
+                t.webView.pauseTimers();
+                t.webView.onHide();
+            }
+        }
+        tabStorage.getTab(tab).webView.resumeTimers();
+        tabStorage.getTab(tab).webView.onShow();
+        showTab(tabStorage.getTab(tab));
+    }
+
+    @Override
+    public void showTab(Tab tab) {
+        try {
+            tab.webView.drawWithColorMode();
+        } catch (Exception ex) {
+            // Ignore
+        }
+    }
+
+    @Override
     public void hideSwitcher() {
         switcherStatus = SwitcherStatus.HIDDEN;
     }
@@ -107,5 +129,15 @@ public abstract class BasicTabSwitcher extends ExtendedAndroidClass implements T
         getCurrentTab().setUrl(url);
         getCurrentTab().setTitle(title);
     }
+
+    public void fixWebResumation() {
+        for ( Tab t : tabStorage.getTabList() ) {
+            t.webView.resumeTimers();
+            t.webView.onShow();
+        }
+        switchTab(currentTab);
+    }
+
+    public abstract void updateAllTabs();
 
 }

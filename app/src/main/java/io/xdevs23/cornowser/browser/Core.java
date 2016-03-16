@@ -43,8 +43,12 @@ package io.xdevs23.cornowser.browser;
 
 import android.app.Application;
 import android.content.Context;
+import android.content.SharedPreferences;
 
+import org.xdevs23.config.ConfigUtils;
 import org.xdevs23.debugutils.Logging;
+
+import io.xdevs23.cornowser.browser.browser.BrowserStorage;
 
 /**
  * This is the core of the application
@@ -53,10 +57,20 @@ public class Core extends Application {
 
     protected static Context coreContext;
 
+    protected static Core applicationCore;
+
     @Override
     public void onCreate() {
         Logging.logd("PRE INIT START");
+
+        applicationCore = this;
+
         coreContext = this.getApplicationContext();
+
+        SharedPreferences sp = coreContext.getSharedPreferences("userprefs", 0);
+        ConfigUtils.forceDebug = sp.getBoolean(BrowserStorage.BPrefKeys.debugModePref, false);
+
+        if(ConfigUtils.forceDebug) Logging.logd("DEBUG MODE IS FORCE-ENABLED.\nPre init finished!");
 
         super.onCreate();
     }

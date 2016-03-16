@@ -16,6 +16,28 @@
             android:summary="@string/settings_browsing_homepage_summary"
             android:key="settings_userhomepage" />
 
+        <ListPreference
+            android:id="@+id/settings_preference_searchengine"
+            android:title="@string/settings_browsing_searchengine_title"
+            android:summary="@string/settings_browsing_searchengine_summary"
+            android:key="settings_search_engine"
+            android:dialogTitle="@string/settings_browsing_searchengine_title"
+            android:entries="@array/settings_browsing_searchengine_entries"
+            android:entryValues="@array/settings_browsing_searchengine_entries"
+            android:defaultValue="0" />
+
+        <Preference
+            android:id="@+id/settings_preference_adblock"
+            android:title="@string/settings_browsing_adblock_title"
+            android:summary="@string/settings_browsing_adblock_summary"
+            android:key="settings_go_adblock" />
+
+        <SwitchPreference
+            android:id="@+id/settings_preference_lsession"
+            android:title="@string/settings_browsing_lsession_title"
+            android:summary="@string/settings_browsing_lsession_summary"
+            android:key="settings_last_session" />
+
     </PreferenceCategory>
 
     <PreferenceCategory
@@ -56,6 +78,12 @@
             android:entryValues="@array/settings_appearance_webcolmode_entryvalues"
             android:defaultValue="0" />
 
+        <SwitchPreference
+            android:id="@+id/settings_preference_enablecoloring"
+            android:title="@string/settings_appearance_omnicoloring_title"
+            android:summary="@string/settings_appearance_omnicoloring_summary"
+            android:key="settings_omni_coloring" />
+
     </PreferenceCategory>
 
 
@@ -63,6 +91,18 @@
         android:id="@+id/settings_category_misc"
         android:title="@string/settings_category_misc_title"
         android:key="settings_category_misc">
+
+        <SwitchPreference
+            android:id="@+id/settings_preference_debugmode"
+            android:title="@string/settings_misc_debug_title"
+            android:summary="@string/settings_misc_debug_summary"
+            android:key="settings_debug_mode" />
+
+        <SwitchPreference
+            android:id="@+id/settings_preference_optout_clytics"
+            android:title="@string/settings_misc_optout_clytics_title"
+            android:summary="@string/settings_misc_optout_clytics_summary"
+            android:key="settings_optout_clytics" />
 
         <Preference
             android:id="@+id/settings_preference_licenses"
